@@ -1,0 +1,6 @@
+# GCX Warehouse Commodity Intake and Reporting System
+#
+# This project uses only the Python standard library (tkinter, sqlite3, csv,
+# json, datetime, pathlib, math). No third-party packages are required.
+#
+# Install Python 3.10 or later and run:  python app.py

@@ -1,6 +1,7 @@
 
 import csv
 import json
+import math
 import sqlite3
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -13,8 +14,8 @@ DB_FILE = Path(__file__).with_name("gcx_warehouse.db")
 COMMODITIES = ("Maize", "Soybean", "Sesame", "Sorghum")
 GRADES = ("Grade 1", "Grade 2", "Rejected")
 WAREHOUSES = ("Tamale", "Kumasi", "Tema", "Wa", "Takoradi", "Accra", "Bolgatanga")
-MIN_MOISTURE = 1.0
-MAX_MOISTURE = 13.0
+MIN_MOISTURE = 0.0
+MAX_MOISTURE = 100.0
 
 MOISTURE_LIMITS = {
     "Maize": 13.5,
@@ -61,11 +62,16 @@ class GCXDatabase:
         code = "".join(ch for ch in warehouse.upper() if ch.isalnum())[:3] or "WH"
         day = received_at.strftime("%Y%m%d")
         prefix = f"GCX-{code}-{day}-"
-        row = self.connection.execute(
-            "SELECT COUNT(*) AS total FROM deliveries WHERE receipt_no LIKE ?",
+        rows = self.connection.execute(
+            "SELECT receipt_no FROM deliveries WHERE receipt_no LIKE ?",
             (prefix + "%",),
-        ).fetchone()
-        return f"{prefix}{row['total'] + 1:03d}"
+        ).fetchall()
+        highest = 0
+        for row in rows:
+            suffix = row["receipt_no"][len(prefix):]
+            if suffix.isdigit():
+                highest = max(highest, int(suffix))
+        return f"{prefix}{highest + 1:03d}"
 
     def add_delivery(self, record):
         columns = ", ".join(record.keys())
@@ -119,6 +125,8 @@ def validate_positive_number(value, field_name):
         number = float(value)
     except ValueError as exc:
         raise ValueError(f"{field_name} must be a valid number.") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field_name} must be a valid number.")
     if number <= 0:
         raise ValueError(f"{field_name} must be greater than zero.")
     return number
@@ -129,8 +137,8 @@ def validate_moisture(value):
         number = float(value)
     except ValueError as exc:
         raise ValueError("Moisture content must be a valid number.") from exc
-    if not MIN_MOISTURE <= number <= MAX_MOISTURE:
-        raise ValueError("Moisture content must be between 1% and 13%.")
+    if not math.isfinite(number) or not MIN_MOISTURE <= number <= MAX_MOISTURE:
+        raise ValueError("Moisture content must be between 0% and 100%.")
     return number
 
 def calculate_values(quantity, price, grade):
@@ -536,7 +544,7 @@ class GCXApp(tk.Tk):
 
         ttk.Label(
             self.dashboard_tab,
-            text="Accepted moisture content: 1%–13% inclusive",
+            text="Per-commodity moisture limits — Maize/Sorghum 13.5%, Soybean 13.0%, Sesame 8.0%",
             font=("Segoe UI", 10, "bold"),
         ).pack(anchor="w", pady=(4, 6))
 
@@ -640,7 +648,7 @@ class GCXApp(tk.Tk):
             form.columnconfigure(col, weight=1)
 
         hint = (
-            "Moisture content must be between 1% and 13%. "
+            "Moisture content must be between 0% and 100%. "
             "Warehouse locations are selected from the approved GCX list. "
             "Grade 2 attracts a 5% deduction; rejected deliveries have GHS 0.00 accepted value."
         )
@@ -697,7 +705,9 @@ class GCXApp(tk.Tk):
             "receipt", "date", "depositor", "warehouse", "commodity", "quantity",
             "moisture", "grade", "price", "accepted"
         )
-        self.tree = ttk.Treeview(self.records_tab, columns=columns, show="headings", height=20)
+        tree_frame = ttk.Frame(self.records_tab)
+        tree_frame.pack(fill="both", expand=True, pady=(10, 0))
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=20)
         headings = {
             "receipt": "Receipt No.",
             "date": "Received",
@@ -719,11 +729,11 @@ class GCXApp(tk.Tk):
             self.tree.heading(col, text=headings[col])
             self.tree.column(col, width=widths[col], anchor="center")
 
-        yscroll = ttk.Scrollbar(self.records_tab, orient="vertical", command=self.tree.yview)
+        yscroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         xscroll = ttk.Scrollbar(self.records_tab, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-        self.tree.pack(fill="both", expand=True, pady=(10, 0))
-        yscroll.place(relx=1.0, rely=0.17, relheight=0.70, anchor="ne")
+        yscroll.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
         xscroll.pack(fill="x")
 
         actions = ttk.Frame(self.records_tab)
@@ -772,10 +782,8 @@ class GCXApp(tk.Tk):
 
             received_at = datetime.now()
             original, deduction, accepted = calculate_values(quantity, price, grade)
-            receipt = self.db.generate_receipt_no(warehouse, received_at)
 
             record = {
-                "receipt_no": receipt,
                 "depositor_name": depositor,
                 "warehouse_location": warehouse,
                 "commodity_type": commodity,
@@ -788,7 +796,18 @@ class GCXApp(tk.Tk):
                 "accepted_value": accepted,
                 "received_at": received_at.isoformat(timespec="seconds"),
             }
-            self.db.add_delivery(record)
+            # Regenerate the receipt number and retry if a concurrent write
+            # already claimed the same number (UNIQUE constraint violation).
+            for attempt in range(5):
+                receipt = self.db.generate_receipt_no(warehouse, received_at)
+                try:
+                    self.db.add_delivery({"receipt_no": receipt, **record})
+                    break
+                except sqlite3.IntegrityError:
+                    if attempt == 4:
+                        raise
+            else:
+                raise sqlite3.IntegrityError("Could not allocate a unique receipt number.")
 
             warning = ""
             limit = MOISTURE_LIMITS.get(commodity)
@@ -823,6 +842,11 @@ class GCXApp(tk.Tk):
             messagebox.showinfo("Delivery Saved", f"Delivery saved.\nReceipt: {receipt}")
         except ValueError as exc:
             messagebox.showerror("Invalid Information", str(exc))
+        except sqlite3.Error as exc:
+            messagebox.showerror(
+                "Save Failed",
+                f"The delivery could not be saved.\n\n{exc}",
+            )
 
     def clear_form(self):
         for key in ("depositor", "quantity", "moisture", "price"):
