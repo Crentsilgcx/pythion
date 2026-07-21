@@ -52,10 +52,17 @@ class GCXDatabase:
                 original_value REAL NOT NULL,
                 quality_deduction REAL NOT NULL,
                 accepted_value REAL NOT NULL,
-                received_at TEXT NOT NULL
+                received_at TEXT NOT NULL,
+                updated_at TEXT
             )
             """
         )
+        columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(deliveries)")
+        }
+        if "updated_at" not in columns:
+            self.connection.execute("ALTER TABLE deliveries ADD COLUMN updated_at TEXT")
         self.connection.commit()
 
     def generate_receipt_no(self, warehouse, received_at):
@@ -80,6 +87,23 @@ class GCXDatabase:
             f"INSERT INTO deliveries ({columns}) VALUES ({placeholders})",
             tuple(record.values()),
         )
+        self.connection.commit()
+
+    def get_delivery(self, record_id):
+        return self.connection.execute(
+            "SELECT * FROM deliveries WHERE id = ?", (record_id,)
+        ).fetchone()
+
+    def update_delivery(self, record_id, record):
+        assignments = ", ".join(f"{column} = ?" for column in record)
+        self.connection.execute(
+            f"UPDATE deliveries SET {assignments} WHERE id = ?",
+            (*record.values(), record_id),
+        )
+        self.connection.commit()
+
+    def delete_delivery(self, record_id):
+        self.connection.execute("DELETE FROM deliveries WHERE id = ?", (record_id,))
         self.connection.commit()
 
     def fetch_deliveries(self, filters=None):
@@ -209,7 +233,7 @@ class GCXApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("980x760")
+        self.geometry("1024x800")
         self.minsize(820, 650)
         self.db = GCXDatabase()
         self.dark_mode = False
@@ -222,11 +246,13 @@ class GCXApp(tk.Tk):
             pass
 
         self.status_var = tk.StringVar(value="Ready")
+        self.editing_id = None
         self.apply_theme()
         self.create_header()
         self.create_tabs()
         self.create_status_bar()
         self.refresh_table()
+        self.bind_shortcuts()
 
     def theme_colours(self):
         if self.dark_mode:
@@ -405,6 +431,25 @@ class GCXApp(tk.Tk):
             foreground=c["muted"],
             padding=(10, 6),
         )
+        self.style.configure(
+            "Danger.TLabel",
+            background=c["bg"],
+            foreground=c["danger"],
+            font=("Segoe UI", 10, "bold"),
+        )
+        self.style.configure(
+            "Calc.TLabel",
+            background=c["bg"],
+            foreground=c["primary"],
+            font=("Segoe UI", 11, "bold"),
+        )
+        self.style.configure(
+            "EditBanner.TLabel",
+            background=c["surface_alt"],
+            foreground=c["text"],
+            padding=(10, 8),
+            font=("Segoe UI", 10, "bold"),
+        )
 
         for name in ("preview", "report_text"):
             widget = getattr(self, name, None)
@@ -510,16 +555,18 @@ class GCXApp(tk.Tk):
             ("quantity", "Total Quantity"),
             ("value", "Accepted Value"),
             ("rejected", "Rejected Deliveries"),
+            ("moisture", "Average Moisture"),
+            ("top_commodity", "Top Commodity"),
         )
         for index, (key, label) in enumerate(metrics):
             card = ttk.LabelFrame(cards, padding=14)
-            card.grid(row=index // 2, column=index % 2, sticky="nsew", padx=6, pady=6)
+            card.grid(row=index // 3, column=index % 3, sticky="nsew", padx=6, pady=6)
             ttk.Label(card, text=label, style="MetricTitle.TLabel").pack(anchor="w")
             value = ttk.Label(card, text="0", style="MetricValue.TLabel")
             value.pack(anchor="w", pady=(5, 0))
             self.dashboard_labels[key] = value
-        cards.columnconfigure(0, weight=1)
-        cards.columnconfigure(1, weight=1)
+        for column in (0, 1, 2):
+            cards.columnconfigure(column, weight=1)
 
         warehouse_frame = ttk.LabelFrame(
             self.dashboard_tab,
@@ -532,7 +579,7 @@ class GCXApp(tk.Tk):
             warehouse_frame,
             columns=("warehouse", "deliveries", "quantity"),
             show="headings",
-            height=8,
+            height=len(WAREHOUSES),
         )
         self.dashboard_tree.heading("warehouse", text="Warehouse")
         self.dashboard_tree.heading("deliveries", text="Deliveries")
@@ -566,10 +613,25 @@ class GCXApp(tk.Tk):
         total_value = sum(row["accepted_value"] for row in records)
         rejected = sum(row["quality_grade"] == "Rejected" for row in records)
 
+        average_moisture = (
+            sum(row["moisture_content"] for row in records) / len(records)
+            if records else 0.0
+        )
+        commodity_totals = {}
+        for row in records:
+            commodity_totals[row["commodity_type"]] = (
+                commodity_totals.get(row["commodity_type"], 0.0) + row["quantity_mt"]
+            )
+        top_commodity = (
+            max(commodity_totals, key=commodity_totals.get) if commodity_totals else "—"
+        )
+
         self.dashboard_labels["deliveries"].configure(text=str(len(records)))
         self.dashboard_labels["quantity"].configure(text=f"{total_quantity:,.2f} MT")
         self.dashboard_labels["value"].configure(text=money(total_value))
         self.dashboard_labels["rejected"].configure(text=str(rejected))
+        self.dashboard_labels["moisture"].configure(text=f"{average_moisture:,.2f}%")
+        self.dashboard_labels["top_commodity"].configure(text=top_commodity)
 
         stats = {
             warehouse: {"deliveries": 0, "quantity": 0.0}
@@ -598,8 +660,16 @@ class GCXApp(tk.Tk):
             )
 
     def build_intake_tab(self):
+        self.edit_banner = ttk.Label(
+            self.intake_tab,
+            text="",
+            style="EditBanner.TLabel",
+            anchor="w",
+        )
+
         form = ttk.LabelFrame(self.intake_tab, text="Commodity Delivery Details", padding=18)
         form.pack(fill="x")
+        self.intake_form = form
 
         self.form_vars = {
             "depositor": tk.StringVar(),
@@ -652,16 +722,98 @@ class GCXApp(tk.Tk):
             "Warehouse locations are selected from the approved GCX list. "
             "Grade 2 attracts a 5% deduction; rejected deliveries have GHS 0.00 accepted value."
         )
-        ttk.Label(self.intake_tab, text=hint, wraplength=1050).pack(anchor="w", pady=(12, 6))
+        ttk.Label(self.intake_tab, text=hint, wraplength=1050).pack(anchor="w", pady=(12, 2))
+
+        self.calc_var = tk.StringVar(value="Enter quantity, price and grade to preview the accepted value.")
+        ttk.Label(self.intake_tab, textvariable=self.calc_var, style="Calc.TLabel").pack(anchor="w", pady=(4, 0))
+        self.moisture_warning_var = tk.StringVar(value="")
+        ttk.Label(
+            self.intake_tab,
+            textvariable=self.moisture_warning_var,
+            style="Danger.TLabel",
+        ).pack(anchor="w")
+
+        for key in ("quantity", "price", "grade", "moisture", "commodity"):
+            self.form_vars[key].trace_add("write", self.update_live_preview)
 
         btns = ttk.Frame(self.intake_tab)
         btns.pack(fill="x", pady=8)
-        ttk.Button(btns, text="Save Delivery", command=self.save_delivery, style="Primary.TButton").pack(side="left")
+        self.save_button = ttk.Button(
+            btns, text="Save Delivery", command=self.save_delivery, style="Primary.TButton"
+        )
+        self.save_button.pack(side="left")
         ttk.Button(btns, text="Clear Form", command=self.clear_form).pack(side="left", padx=8)
+        ttk.Button(btns, text="Save Receipt TXT", command=self.export_receipt).pack(side="left")
+        self.cancel_edit_button = ttk.Button(
+            btns, text="Cancel Edit", command=self.cancel_edit
+        )
 
         self.preview = tk.Text(self.intake_tab, height=13, wrap="word", state="disabled")
         self.preview.pack(fill="both", expand=True, pady=(10, 0))
         self.apply_theme()
+
+    def update_live_preview(self, *_args):
+        try:
+            quantity = float(self.form_vars["quantity"].get())
+            price = float(self.form_vars["price"].get())
+            grade = self.form_vars["grade"].get()
+            if not (math.isfinite(quantity) and math.isfinite(price)):
+                raise ValueError
+            if quantity <= 0 or price <= 0 or grade not in GRADES:
+                raise ValueError
+            original, deduction, accepted = calculate_values(quantity, price, grade)
+            self.calc_var.set(
+                f"Original {money(original)}   •   Deduction {money(deduction)}"
+                f"   •   Accepted {money(accepted)}"
+            )
+        except (ValueError, TypeError):
+            self.calc_var.set("Enter quantity, price and grade to preview the accepted value.")
+
+        warning = ""
+        try:
+            moisture = float(self.form_vars["moisture"].get())
+            commodity = self.form_vars["commodity"].get()
+            limit = MOISTURE_LIMITS.get(commodity)
+            if limit is not None and math.isfinite(moisture) and moisture > limit:
+                warning = (
+                    f"⚠ Moisture {moisture:.2f}% exceeds the {commodity} "
+                    f"limit of {limit:.2f}%."
+                )
+        except (ValueError, TypeError):
+            pass
+        self.moisture_warning_var.set(warning)
+
+    def start_edit(self, record_id):
+        record = self.db.get_delivery(record_id)
+        if record is None:
+            messagebox.showerror("Record Not Found", "The selected record no longer exists.")
+            self.refresh_table()
+            return
+        self.editing_id = record_id
+        self.form_vars["depositor"].set(record["depositor_name"])
+        self.form_vars["warehouse"].set(record["warehouse_location"])
+        self.form_vars["commodity"].set(record["commodity_type"])
+        self.form_vars["quantity"].set(f"{record['quantity_mt']:g}")
+        self.form_vars["moisture"].set(f"{record['moisture_content']:g}")
+        self.form_vars["grade"].set(record["quality_grade"])
+        self.form_vars["price"].set(f"{record['price_per_mt']:g}")
+
+        self.edit_banner.configure(
+            text=f"✎ Editing delivery {record['receipt_no']} — changes overwrite the existing record."
+        )
+        self.edit_banner.pack(fill="x", pady=(0, 8), before=self.intake_form)
+        self.save_button.configure(text="Update Delivery")
+        self.cancel_edit_button.pack(side="left", padx=(0, 8))
+        self.notebook.select(self.intake_tab)
+        self.status_var.set(f"Editing {record['receipt_no']}")
+
+    def cancel_edit(self):
+        self.editing_id = None
+        self.edit_banner.pack_forget()
+        self.save_button.configure(text="Save Delivery")
+        self.cancel_edit_button.pack_forget()
+        self.clear_form()
+        self.status_var.set("Edit cancelled")
 
     def build_records_tab(self):
         filters = ttk.LabelFrame(self.records_tab, text="Search and Filter", padding=10)
@@ -676,7 +828,10 @@ class GCXApp(tk.Tk):
         }
 
         ttk.Label(filters, text="Depositor").grid(row=0, column=0, padx=5, pady=5)
-        ttk.Entry(filters, textvariable=self.filter_vars["depositor"], width=20).grid(row=0, column=1, padx=5)
+        self.depositor_filter_entry = ttk.Entry(
+            filters, textvariable=self.filter_vars["depositor"], width=20
+        )
+        self.depositor_filter_entry.grid(row=0, column=1, padx=5)
         ttk.Label(filters, text="Commodity").grid(row=0, column=2, padx=5)
         ttk.Combobox(
             filters, textvariable=self.filter_vars["commodity"],
@@ -707,7 +862,7 @@ class GCXApp(tk.Tk):
         )
         tree_frame = ttk.Frame(self.records_tab)
         tree_frame.pack(fill="both", expand=True, pady=(10, 0))
-        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=20)
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=10)
         headings = {
             "receipt": "Receipt No.",
             "date": "Received",
@@ -725,9 +880,15 @@ class GCXApp(tk.Tk):
             "commodity": 95, "quantity": 80, "moisture": 85, "grade": 80,
             "price": 100, "accepted": 125
         }
+        self.sort_state = {"column": None, "reverse": False}
         for col in columns:
-            self.tree.heading(col, text=headings[col])
+            self.tree.heading(
+                col,
+                text=headings[col],
+                command=lambda c=col: self.sort_by_column(c),
+            )
             self.tree.column(col, width=widths[col], anchor="center")
+        self.tree_headings = headings
 
         yscroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         xscroll = ttk.Scrollbar(self.records_tab, orient="horizontal", command=self.tree.xview)
@@ -736,11 +897,65 @@ class GCXApp(tk.Tk):
         self.tree.pack(side="left", fill="both", expand=True)
         xscroll.pack(fill="x")
 
+        self.tree.bind("<Double-1>", self.on_row_double_click)
+        self.tree.bind("<Delete>", lambda _e: self.delete_selected())
+
         actions = ttk.Frame(self.records_tab)
         actions.pack(fill="x", pady=8)
+        ttk.Button(actions, text="Edit Selected", command=self.edit_selected, style="Primary.TButton").pack(side="left")
+        ttk.Button(actions, text="Delete Selected", command=self.delete_selected).pack(side="left", padx=8)
         ttk.Button(actions, text="Export Filtered CSV", command=self.export_csv).pack(side="left")
         ttk.Button(actions, text="Export Filtered JSON", command=self.export_json).pack(side="left", padx=8)
         ttk.Button(actions, text="Show Three Largest", command=self.show_three_largest).pack(side="left")
+        self.record_count_var = tk.StringVar(value="")
+        ttk.Label(actions, textvariable=self.record_count_var).pack(side="right")
+
+    def selected_record_id(self):
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showinfo("No Selection", "Select a record in the table first.")
+            return None
+        return int(selection[0])
+
+    def on_row_double_click(self, event):
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            return
+        row = self.tree.identify_row(event.y)
+        if row:
+            self.start_edit(int(row))
+
+    def edit_selected(self):
+        record_id = self.selected_record_id()
+        if record_id is not None:
+            self.start_edit(record_id)
+
+    def delete_selected(self):
+        record_id = self.selected_record_id()
+        if record_id is None:
+            return
+        record = self.db.get_delivery(record_id)
+        if record is None:
+            self.refresh_table()
+            return
+        if not messagebox.askyesno(
+            "Confirm Delete",
+            f"Permanently delete delivery {record['receipt_no']}\n"
+            f"({record['depositor_name']}, {record['quantity_mt']:,.2f} MT "
+            f"{record['commodity_type']})?",
+        ):
+            return
+        if self.editing_id == record_id:
+            self.cancel_edit()
+        self.db.delete_delivery(record_id)
+        self.status_var.set(f"Deleted delivery {record['receipt_no']}")
+        self.refresh_table()
+
+    def sort_by_column(self, column):
+        if self.sort_state["column"] == column:
+            self.sort_state["reverse"] = not self.sort_state["reverse"]
+        else:
+            self.sort_state = {"column": column, "reverse": False}
+        self.refresh_table()
 
     def build_report_tab(self):
         controls = ttk.Frame(self.report_tab)
@@ -780,7 +995,7 @@ class GCXApp(tk.Tk):
                 raise ValueError("Grade must be Grade 1, Grade 2 or Rejected.")
             price = validate_positive_number(self.form_vars["price"].get(), "Price")
 
-            received_at = datetime.now()
+            now = datetime.now()
             original, deduction, accepted = calculate_values(quantity, price, grade)
 
             record = {
@@ -794,20 +1009,38 @@ class GCXApp(tk.Tk):
                 "original_value": original,
                 "quality_deduction": deduction,
                 "accepted_value": accepted,
-                "received_at": received_at.isoformat(timespec="seconds"),
             }
-            # Regenerate the receipt number and retry if a concurrent write
-            # already claimed the same number (UNIQUE constraint violation).
-            for attempt in range(5):
-                receipt = self.db.generate_receipt_no(warehouse, received_at)
-                try:
-                    self.db.add_delivery({"receipt_no": receipt, **record})
-                    break
-                except sqlite3.IntegrityError:
-                    if attempt == 4:
-                        raise
+
+            if self.editing_id is not None:
+                existing = self.db.get_delivery(self.editing_id)
+                if existing is None:
+                    raise ValueError("The record being edited no longer exists.")
+                if not messagebox.askyesno(
+                    "Confirm Update",
+                    f"Overwrite delivery {existing['receipt_no']} with the corrected details?",
+                ):
+                    return
+                record["updated_at"] = now.isoformat(timespec="seconds")
+                self.db.update_delivery(self.editing_id, record)
+                receipt = existing["receipt_no"]
+                received_at = datetime.fromisoformat(existing["received_at"])
+                saved_heading = "DELIVERY UPDATED SUCCESSFULLY"
             else:
-                raise sqlite3.IntegrityError("Could not allocate a unique receipt number.")
+                received_at = now
+                record["received_at"] = received_at.isoformat(timespec="seconds")
+                # Regenerate the receipt number and retry if a concurrent write
+                # already claimed the same number (UNIQUE constraint violation).
+                for attempt in range(5):
+                    receipt = self.db.generate_receipt_no(warehouse, received_at)
+                    try:
+                        self.db.add_delivery({"receipt_no": receipt, **record})
+                        break
+                    except sqlite3.IntegrityError:
+                        if attempt == 4:
+                            raise
+                else:
+                    raise sqlite3.IntegrityError("Could not allocate a unique receipt number.")
+                saved_heading = "DELIVERY SAVED SUCCESSFULLY"
 
             warning = ""
             limit = MOISTURE_LIMITS.get(commodity)
@@ -818,7 +1051,7 @@ class GCXApp(tk.Tk):
                 )
 
             summary = (
-                f"DELIVERY SAVED SUCCESSFULLY\n\n"
+                f"{saved_heading}\n\n"
                 f"Receipt Number: {receipt}\n"
                 f"Depositor: {depositor}\n"
                 f"Warehouse: {warehouse}\n"
@@ -837,9 +1070,20 @@ class GCXApp(tk.Tk):
             self.preview.delete("1.0", "end")
             self.preview.insert("1.0", summary)
             self.preview.configure(state="disabled")
-            self.status_var.set(f"Saved delivery {receipt}")
+            was_update = self.editing_id is not None
+            if was_update:
+                self.editing_id = None
+                self.edit_banner.pack_forget()
+                self.save_button.configure(text="Save Delivery")
+                self.cancel_edit_button.pack_forget()
+            self.status_var.set(
+                f"{'Updated' if was_update else 'Saved'} delivery {receipt}"
+            )
             self.refresh_table()
-            messagebox.showinfo("Delivery Saved", f"Delivery saved.\nReceipt: {receipt}")
+            messagebox.showinfo(
+                "Delivery Updated" if was_update else "Delivery Saved",
+                f"Delivery {'updated' if was_update else 'saved'}.\nReceipt: {receipt}",
+            )
         except ValueError as exc:
             messagebox.showerror("Invalid Information", str(exc))
         except sqlite3.Error as exc:
@@ -881,11 +1125,34 @@ class GCXApp(tk.Tk):
             return
 
         if hasattr(self, "tree"):
+            sort_keys = {
+                "receipt": lambda r: r["receipt_no"],
+                "date": lambda r: r["received_at"],
+                "depositor": lambda r: r["depositor_name"].lower(),
+                "warehouse": lambda r: r["warehouse_location"].lower(),
+                "commodity": lambda r: r["commodity_type"],
+                "quantity": lambda r: r["quantity_mt"],
+                "moisture": lambda r: r["moisture_content"],
+                "grade": lambda r: r["quality_grade"],
+                "price": lambda r: r["price_per_mt"],
+                "accepted": lambda r: r["accepted_value"],
+            }
+            column = self.sort_state["column"]
+            if column in sort_keys:
+                records = sorted(
+                    records, key=sort_keys[column], reverse=self.sort_state["reverse"]
+                )
+            for col, heading in self.tree_headings.items():
+                suffix = ""
+                if col == column:
+                    suffix = " ▼" if self.sort_state["reverse"] else " ▲"
+                self.tree.heading(col, text=heading + suffix)
+
             for item in self.tree.get_children():
                 self.tree.delete(item)
             for row in records:
                 self.tree.insert(
-                    "", "end",
+                    "", "end", iid=str(row["id"]),
                     values=(
                         row["receipt_no"],
                         row["received_at"].replace("T", " "),
@@ -900,6 +1167,13 @@ class GCXApp(tk.Tk):
                     ),
                 )
             self.status_var.set(f"{len(records)} record(s) displayed")
+            if hasattr(self, "record_count_var"):
+                total = len(self.db.fetch_deliveries())
+                shown = len(records)
+                self.record_count_var.set(
+                    f"Showing {shown} of {total} record(s)"
+                    if shown != total else f"{total} record(s)"
+                )
             self.refresh_dashboard()
 
     def reset_filters(self):
@@ -994,6 +1268,40 @@ class GCXApp(tk.Tk):
             return
         Path(path).write_text(report, encoding="utf-8")
         self.status_var.set(f"Report exported to {path}")
+
+    def export_receipt(self):
+        receipt_text = self.preview.get("1.0", "end").strip()
+        if not receipt_text:
+            messagebox.showinfo(
+                "No Receipt", "Save a delivery first to generate a receipt."
+            )
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save Receipt", defaultextension=".txt",
+            filetypes=[("Text files", "*.txt")],
+        )
+        if not path:
+            return
+        Path(path).write_text(receipt_text, encoding="utf-8")
+        self.status_var.set(f"Receipt saved to {path}")
+
+    def bind_shortcuts(self):
+        self.bind("<Control-s>", self.shortcut_save)
+        self.bind("<F5>", lambda _e: self.refresh_table())
+        self.bind("<Control-f>", self.shortcut_find)
+        self.bind("<Escape>", self.shortcut_escape)
+
+    def shortcut_save(self, _event):
+        if self.notebook.select() == str(self.intake_tab):
+            self.save_delivery()
+
+    def shortcut_find(self, _event):
+        self.notebook.select(self.records_tab)
+        self.depositor_filter_entry.focus_set()
+
+    def shortcut_escape(self, _event):
+        if self.editing_id is not None:
+            self.cancel_edit()
 
     def on_close(self):
         self.db.close()

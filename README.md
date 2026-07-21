@@ -121,14 +121,35 @@ Variables, strings, numeric conversion, conditionals, loops, exception handling,
 The application is organised into four tabs:
 
 - **Dashboard** — total deliveries, total quantity, accepted value, rejected
-  deliveries and a per-warehouse quantity summary.
+  deliveries, average moisture, top commodity and a per-warehouse quantity summary.
 - **New Delivery** — a single form for capturing a commodity delivery, with a
-  saved-delivery preview showing the original value, deduction and accepted value.
+  live calculation preview (original value, deduction, accepted value) and a
+  live moisture warning as you type. Saved receipts can be exported to TXT.
 - **Search & Records** — filter by depositor, commodity, warehouse, grade and
-  minimum quantity; export the filtered results to CSV or JSON; and list the
-  three largest deliveries.
+  minimum quantity; click any column heading to sort; edit or delete a selected
+  record; export the filtered results to CSV or JSON; and list the three
+  largest deliveries.
 - **Daily Report** — generate and export a daily warehouse report by date and
   (optionally) warehouse.
+
+### Correcting or Removing a Delivery
+
+1. Open **Search & Records** and select the record (or double-click it).
+2. Click **Edit Selected** — the form opens pre-filled with an "Editing" banner.
+3. Correct the details and click **Update Delivery**, then confirm.
+   The receipt number is preserved and the correction time is stored in the
+   `updated_at` column.
+4. Press **Escape** or click **Cancel Edit** to abandon the edit.
+5. **Delete Selected** (or the Delete key) permanently removes a record after
+   confirmation.
+
+### Keyboard Shortcuts
+
+- `Ctrl+S` — save/update the delivery (on the New Delivery tab)
+- `Ctrl+F` — jump to Search & Records and focus the depositor filter
+- `F5` — refresh the records table and dashboard
+- `Escape` — cancel an in-progress edit
+- `Delete` — delete the selected record (in the records table)
 
 Visual features:
 
