@@ -35,6 +35,8 @@ This is a complete Python desktop application developed from the GCX practical a
 - Rejected: final accepted value is GHS 0.00.
 - Quantity and price must be greater than zero.
 - Moisture must be between 0% and 100%.
+- A warning is shown when moisture exceeds the per-commodity limit
+  (Maize/Sorghum 13.5%, Soybean 13.0%, Sesame 8.0%).
 
 ## How to Run
 
@@ -54,9 +56,28 @@ No external Python package is required.
 - `app.py` – main application.
 - `sample_deliveries.csv` – sample records.
 - `sample_deliveries.json` – sample records in JSON format.
+- `sample_gcx_warehouse.db` – a ready-made SQLite database with a few demo deliveries.
 - `test_app.py` – unit tests for validation, calculations and reporting.
 - `requirements.txt` – confirms that only the Python standard library is required.
-- `screenshots/` – sample application views.
+
+## Loading the Sample Database (Optional)
+
+The application reads and writes `gcx_warehouse.db` in the project folder. To
+start from the bundled demo data instead of an empty database, copy the sample
+over (this is optional and only needed once):
+
+```bash
+cp sample_gcx_warehouse.db gcx_warehouse.db
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item sample_gcx_warehouse.db gcx_warehouse.db
+```
+
+The sample file itself is never modified by the application, so you can always
+copy it again to reset the demo data.
 
 ## Running the Tests
 
@@ -95,88 +116,25 @@ Variables, strings, numeric conversion, conditionals, loops, exception handling,
 - For production deployment, add authenticated users, role-based access, encryption, audit logs and a central database.
 
 
-## Modern Interface Update
+## Interface
 
-The application now includes:
+The application is organised into four tabs:
 
-- A professional **Light Theme** for bright office environments.
-- A modern **Dark Theme** for low-light use.
-- A theme toggle in the application header.
-- A four-step guided commodity intake process:
-  1. Depositor and warehouse
-  2. Commodity and quantity
-  3. Quality and pricing
-  4. Review and submit
-- Step-by-step validation before the officer can continue.
-- A final review page showing the original value, deduction and accepted value.
-- Modern cards, improved spacing, clearer buttons and enhanced record tables.
+- **Dashboard** — total deliveries, total quantity, accepted value, rejected
+  deliveries and a per-warehouse quantity summary.
+- **New Delivery** — a single form for capturing a commodity delivery, with a
+  saved-delivery preview showing the original value, deduction and accepted value.
+- **Search & Records** — filter by depositor, commodity, warehouse, grade and
+  minimum quantity; export the filtered results to CSV or JSON; and list the
+  three largest deliveries.
+- **Daily Report** — generate and export a daily warehouse report by date and
+  (optionally) warehouse.
 
-The light/dark theme affects the main interface, forms, tables, reports and navigation controls.
+Visual features:
 
+- Light and dark modes with a theme toggle in the header.
+- GCX green accent colour.
+- Dashboard metric cards, styled tables, fields and report panels.
+- Warehouse drop-downs in intake, filters and reports.
 
-## Login, Edit and Update Workflow
-
-### Login
-
-The application opens with a secure login page. Passwords are stored as PBKDF2-SHA256 hashes with unique salts rather than plain text.
-
-Default demonstration account:
-
-- Username: `admin`
-- Password: `GCX@2026`
-
-Change this account before real operational deployment.
-
-### Correcting an Existing Delivery
-
-1. Sign in.
-2. Open **Search & Records**.
-3. Select the incorrect record.
-4. Click **Edit Selected**, or double-click the record.
-5. Correct the depositor, warehouse, commodity, quantity, moisture, grade or price.
-6. Proceed through the guided steps.
-7. Review the corrected values.
-8. Click **Update Delivery**.
-9. Confirm the update to commit the corrected record to SQLite.
-
-The system records the update date/time and the username of the officer who made the correction.
-
-### Submitting a New Delivery
-
-Complete the four steps and click **Submit Delivery**. This commits the new record to the database and generates a receipt number.
-
-
-## Review and Submit Controls
-
-The final review page now includes:
-
-- **Edit Details** — returns the officer to the first step without losing entered data.
-- **Save Draft** — stores the delivery in SQLite so it can be reopened and completed later.
-- **Submit Delivery** — commits the final record after confirmation.
-- A confirmation checkbox that must be selected before submitting or updating a record.
-
-The Submit and Update buttons remain disabled until the warehouse officer confirms that the reviewed information is correct.
-
-
-## Dashboard, Warehouse List and Moisture Limit
-
-The application includes a dashboard with total deliveries, total quantity, accepted value, rejected deliveries and warehouse-level quantity summaries.
-
-Approved warehouses:
-Tamale, Kumasi, Tema, Wa, Takoradi, Accra and Bolgatanga.
-
-Moisture content validation accepts values from 1% to 13% inclusive.
-
-
-## Modern Light and Dark Interface
-
-This dashboard version now uses the same modern visual theme as the mobile-style application:
-
-- Light and dark modes
-- Theme toggle in the header
-- GCX green accent colour
-- Modern dashboard metric cards
-- Improved tabs, tables, fields and buttons
-- Compact responsive desktop layout
-- Styled report and preview panels
-- Warehouse drop-downs in intake, filters and reports
+Approved warehouses: Tamale, Kumasi, Tema, Wa, Takoradi, Accra and Bolgatanga.
