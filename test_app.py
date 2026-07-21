@@ -27,10 +27,20 @@ class TestGCXApp(unittest.TestCase):
 
     def test_moisture(self):
         self.assertEqual(validate_moisture("13"), 13.0)
+        self.assertEqual(validate_moisture("0.5"), 0.5)
+        self.assertEqual(validate_moisture("13.1"), 13.1)
         with self.assertRaises(ValueError):
-            validate_moisture("0.5")
+            validate_moisture("-1")
         with self.assertRaises(ValueError):
-            validate_moisture("13.1")
+            validate_moisture("101")
+        with self.assertRaises(ValueError):
+            validate_moisture("nan")
+
+    def test_positive_number_rejects_non_finite(self):
+        with self.assertRaises(ValueError):
+            validate_positive_number("nan", "Quantity")
+        with self.assertRaises(ValueError):
+            validate_positive_number("inf", "Quantity")
 
     def test_grade_calculations(self):
         original, deduction, accepted = calculate_values(10, 1000, "Grade 1")
