@@ -1,0 +1,44 @@
+[
+  {
+    "receipt_no": "GCX-TAM-20260720-001",
+    "depositor_name": "Kwame Mensah",
+    "warehouse_location": "Tamale",
+    "commodity_type": "Maize",
+    "quantity_mt": 70.0,
+    "moisture_content": 12.8,
+    "quality_grade": "Grade 1",
+    "price_per_mt": 3500.0,
+    "original_value": 245000.0,
+    "quality_deduction": 0.0,
+    "accepted_value": 245000.0,
+    "received_at": "2026-07-20T08:15:00"
+  },
+  {
+    "receipt_no": "GCX-TAM-20260720-002",
+    "depositor_name": "Akua Farms",
+    "warehouse_location": "Tamale",
+    "commodity_type": "Soybean",
+    "quantity_mt": 30.5,
+    "moisture_content": 12.2,
+    "quality_grade": "Grade 2",
+    "price_per_mt": 4200.0,
+    "original_value": 128100.0,
+    "quality_deduction": 6405.0,
+    "accepted_value": 121695.0,
+    "received_at": "2026-07-20T09:40:00"
+  },
+  {
+    "receipt_no": "GCX-KUM-20260720-001",
+    "depositor_name": "Adom Cooperative",
+    "warehouse_location": "Kumasi",
+    "commodity_type": "Sesame",
+    "quantity_mt": 20.0,
+    "moisture_content": 9.1,
+    "quality_grade": "Rejected",
+    "price_per_mt": 5100.0,
+    "original_value": 102000.0,
+    "quality_deduction": 102000.0,
+    "accepted_value": 0.0,
+    "received_at": "2026-07-20T11:05:00"
+  }
+]

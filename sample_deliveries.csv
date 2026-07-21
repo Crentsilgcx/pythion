@@ -1,0 +1,4 @@
+receipt_no,depositor_name,warehouse_location,commodity_type,quantity_mt,moisture_content,quality_grade,price_per_mt,original_value,quality_deduction,accepted_value,received_at
+GCX-TAM-20260720-001,Kwame Mensah,Tamale,Maize,70.0,12.8,Grade 1,3500.0,245000.0,0.0,245000.0,2026-07-20T08:15:00
+GCX-TAM-20260720-002,Akua Farms,Tamale,Soybean,30.5,12.2,Grade 2,4200.0,128100.0,6405.0,121695.0,2026-07-20T09:40:00
+GCX-KUM-20260720-001,Adom Cooperative,Kumasi,Sesame,20.0,9.1,Rejected,5100.0,102000.0,102000.0,0.0,2026-07-20T11:05:00
